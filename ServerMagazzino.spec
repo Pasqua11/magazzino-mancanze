@@ -2,11 +2,11 @@
 
 
 a = Analysis(
-    ['server\\app.py'],
+    ['server/app.py'],
     pathex=[],
     binaries=[],
     datas=[('server/templates', 'templates')],
-    hiddenimports=[],
+    hiddenimports=['pystray._win32'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

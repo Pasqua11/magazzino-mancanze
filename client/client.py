@@ -68,6 +68,7 @@ class MagazzinoClient:
         
         # UI Setup
         self.setup_ui()
+        self.applica_titolo()
         
         # Tray Icon Setup
         self.tray_icon = None
@@ -348,6 +349,15 @@ class MagazzinoClient:
             self.known_ids = current_ids
         else:
             self.known_ids &= current_ids
+
+        # Al primo controllo dopo l'avvio non si segnala nulla: gli articoli
+        # gia' in elenco non sono novita' per chi apre il programma adesso.
+        if not self.first_update_done:
+            self.first_update_done = True
+            return
+
+        if new_items_found:
+            self.show_notification(new_items_found)
 
     def show_notification(self, products):
         """Avvisa dell'arrivo di nuovi articoli portando avanti la finestra.
