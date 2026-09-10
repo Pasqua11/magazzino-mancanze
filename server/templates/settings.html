@@ -110,6 +110,14 @@
         <h1>Impostazioni Server</h1>
 
         <div class="form-group">
+            <label for="titolo">Intestazione (scritta iniziale)</label>
+            <input type="text" id="titolo" maxlength="60" placeholder="Articoli Mancanti">
+            <small style="color: var(--text-muted); display: block; margin-top: 0.5rem;">
+                Compare in cima alla pagina web e nella finestra del Client.
+            </small>
+        </div>
+
+        <div class="form-group">
             <label for="port">Porta Server</label>
             <input type="number" id="port" min="1024" max="65535" placeholder="Default: 5000">
             <small style="color: var(--text-muted); display: block; margin-top: 0.5rem;">
@@ -143,19 +151,21 @@
             .then(data => {
                 if (data.port) document.getElementById('port').value = data.port;
                 if (data.archive_limit) document.getElementById('archive_limit').value = data.archive_limit;
+                if (data.titolo) document.getElementById('titolo').value = data.titolo;
             })
             .catch(err => console.error(err));
 
         async function saveSettings() {
             const port = document.getElementById('port').value;
             const archive_limit = document.getElementById('archive_limit').value;
+            const titolo = document.getElementById('titolo').value;
             const msg = document.getElementById('msg');
 
             try {
                 const res = await fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ port: port, archive_limit: archive_limit })
+                    body: JSON.stringify({ port: port, archive_limit: archive_limit, titolo: titolo })
                 });
                 const data = await res.json();
 

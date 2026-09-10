@@ -49,6 +49,11 @@ ARCHIVIO_MAX_RECORD = 2000
 MAX_TESTO = 200
 MAX_NOTE = 1000
 
+# Intestazione mostrata nella pagina web e nel client: modificabile dalle
+# Impostazioni del server, cosi' ogni azienda puo' chiamarla come preferisce.
+TITOLO_PREDEFINITO = "Articoli Mancanti"
+MAX_TITOLO = 60
+
 LOG_FILE = os.path.join(BASE_DIR, 'magazzino_server.log')
 
 # --- DIARIO DEGLI EVENTI ---
@@ -184,7 +189,8 @@ def _write_json(path, data):
 
 # --- CONFIGURAZIONE SERVER ---
 def load_server_config():
-    default_config = {"port": 5000, "archive_limit": 100}
+    default_config = {"port": 5000, "archive_limit": 100,
+                      "titolo": TITOLO_PREDEFINITO}
     config = _read_json(SERVER_CONFIG_FILE, None)
     if not isinstance(config, dict):
         return default_config
@@ -218,7 +224,9 @@ def save_archivio(data):
 @app.route('/')
 def home():
     """Serve la pagina HTML per l'inserimento."""
-    return render_template('index.html')
+    config = load_server_config()
+    return render_template('index.html',
+                           titolo=config.get('titolo', TITOLO_PREDEFINITO))
 
 @app.route('/settings')
 def settings_page():
@@ -250,9 +258,14 @@ def update_settings():
     except (ValueError, TypeError):
         return jsonify({'error': 'Porta e Limite devono essere un numero intero'}), 400
 
+    titolo = testo_valido(req_data.get('titolo', ''), MAX_TITOLO)
+    if not titolo:
+        titolo = TITOLO_PREDEFINITO
+
     config = load_server_config()
     config['port'] = new_port
     config['archive_limit'] = new_limit
+    config['titolo'] = titolo
     
     if save_server_config(config):
         return jsonify({'success': True, 'message': 'Configurazione salvata. Riavvia il server per applicare le modifiche.'})

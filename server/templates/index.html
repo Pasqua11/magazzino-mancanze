@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Segnalazione Mancanze Magazzino (Aggiornato)</title>
+    <title>{{ titolo }} - Magazzino</title>
     <style>
         :root {
             --primary: #2563eb;
@@ -103,7 +103,7 @@
 
 <body>
     <div class="container">
-        <h1>Articoli Mancanti</h1>
+        <h1>{{ titolo }}</h1>
         <div style="text-align: center; margin-bottom: 1.5rem; display: flex; justify-content: center; gap: 1.5rem;">
             <a href="/archivio" style="color: var(--primary); text-decoration: none; font-weight: 500;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -149,7 +149,7 @@
     </div>
 
     <div class="container" style="margin-top: 2rem;">
-        <h1>Lista Articoli Mancanti</h1>
+        <h1>Lista {{ titolo }}</h1>
         <div id="listaMancanze">
             <p style="text-align: center; color: var(--text-muted);">Caricamento...</p>
         </div>
