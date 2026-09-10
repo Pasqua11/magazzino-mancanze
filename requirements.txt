@@ -1,4 +1,11 @@
+# --- Runtime: Server ---
 flask
+
+# --- Runtime: Client ---
 requests
 plyer
+pystray
+Pillow
+
+# --- Solo per compilare gli eseguibili (CREA_ESEGUIBILI.bat) ---
 pyinstaller

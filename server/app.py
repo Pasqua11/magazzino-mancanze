@@ -9,9 +9,23 @@ from threading import Timer
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template
 
-app = Flask(__name__)
-DB_FILE = 'mancanze.json'
-SERVER_CONFIG_FILE = 'server_config.json'
+# --- PERCORSI ---
+# I dati vivono accanto all'eseguibile (build PyInstaller) oppure nella radice
+# del progetto (avvio da sorgente), MAI nella directory di lavoro corrente:
+# cosi' il server ritrova sempre lo stesso archivio da qualunque punto venga
+# avviato (collegamento sul desktop, cartella diversa, avvio automatico).
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+    TEMPLATE_DIR = os.path.join(sys._MEIPASS, 'templates')
+else:
+    _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = os.path.dirname(_SRC_DIR)
+    TEMPLATE_DIR = os.path.join(_SRC_DIR, 'templates')
+
+app = Flask(__name__, template_folder=TEMPLATE_DIR)
+
+DB_FILE = os.path.join(BASE_DIR, 'mancanze.json')
+SERVER_CONFIG_FILE = os.path.join(BASE_DIR, 'server_config.json')
 
 # --- CONFIGURAZIONE SERVER ---
 def load_server_config():
@@ -205,7 +219,7 @@ def delete_mancanza(item_id):
 
 
 # --- ARCHIVIO ---
-ARCHIVIO_FILE = 'archivio.json'
+ARCHIVIO_FILE = os.path.join(BASE_DIR, 'archivio.json')
 
 def load_archivio():
     if not os.path.exists(ARCHIVIO_FILE):

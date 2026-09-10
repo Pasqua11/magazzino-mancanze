@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, simpledialog
 import requests
 import json
 import os
+import sys
 import threading
 import time
 from datetime import datetime
@@ -11,7 +12,14 @@ import pystray
 from PIL import Image, ImageDraw
 
 # --- CONFIGURAZIONE ---
-CONFIG_FILE = 'config.json'
+# Come per il server: la configurazione sta accanto all'eseguibile (o nella
+# radice del progetto se avviato da sorgente), non nella directory di lavoro.
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 DEFAULT_CONFIG = {"server_ip": "", "server_port": 5000, "archive_limit": 100}
 
 def create_normal_icon():

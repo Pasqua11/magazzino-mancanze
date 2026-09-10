@@ -38,9 +38,15 @@ Vai su `http://localhost:5000` nel browser.
 4. Quando il Magazzino inserisce un nuovo articolo, riceverai una **Notifica Windows** (in basso a destra).
 
 ## 4. Reset Configurazione
-Se sbagli a inserire l'IP, cancella il file `client/config.json` e riavvia il Client.
+Se sbagli a inserire l'IP, cancella il file `config.json` e riavvia il Client.
+Il file si trova accanto a `ClientMagazzino.exe` (o nella cartella del progetto se avvii da sorgente).
 
 ## 5. Struttura File
 - `server/app.py`: Logica Server.
-- `server/mancanze.json`: Database testuale.
 - `client/client.py`: Applicazione Desktop.
+
+I dati vengono creati accanto all'eseguibile del Server (o nella cartella del progetto
+se avviato da sorgente), indipendentemente da dove venga lanciato:
+- `mancanze.json`: articoli mancanti in attesa.
+- `archivio.json`: storico degli articoli ordinati (max 2000 record).
+- `server_config.json` / `config.json`: impostazioni di Server e Client.
