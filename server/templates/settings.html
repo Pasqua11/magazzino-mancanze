@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Impostazioni Server</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --surface: #ffffff;
+            --background: #f1f5f9;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background-color: var(--background);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+        }
+
+        .container {
+            background: var(--surface);
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            width: 100%;
+            max-width: 400px;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+            color: var(--primary);
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+
+        button {
+            width: 100%;
+            background-color: var(--primary);
+            color: white;
+            padding: 0.75rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 1rem;
+        }
+
+        button:hover {
+            background-color: #1d4ed8;
+        }
+
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 1.5rem;
+            color: var(--text-muted);
+            text-decoration: none;
+        }
+
+        .message {
+            margin-top: 1rem;
+            padding: 0.75rem;
+            border-radius: 6px;
+            text-align: center;
+            display: none;
+        }
+
+        .success {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+
+        .error {
+            background-color: #fee2e2;
+            color: #ef4444;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Impostazioni Server</h1>
+
+        <div class="form-group">
+            <label for="port">Porta Server</label>
+            <input type="number" id="port" min="1024" max="65535" placeholder="Default: 5000">
+            <small style="color: var(--text-muted); display: block; margin-top: 0.5rem;">
+                Cambiare la porta richiede il riavvio manuale del server.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="archive_limit">Limite Righe da visualizzare in Archivio Storico</label>
+            <input type="number" id="archive_limit" value="100" min="1" max="2000" />
+            <small style="color: var(--text-muted); display: block; margin-top: 0.5rem;">
+                Imposta quanti ordini archiviati caricare quando si apre l'Archivio dal Server.
+            </small>
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-top: 1rem;">
+            <button onclick="saveSettings()" style="flex: 1;">Salva Modifiche</button>
+            <button onclick="restartServer()" style="flex: 1; background-color: #f59e0b;">Riavvia Server</button>
+            <button onclick="shutdownServer()" style="flex: 1; background-color: #ef4444;">Spegni Server</button>
+        </div>
+
+        <div id="msg" class="message"></div>
+
+        <a href="/" class="back-link">← Torna alla Home</a>
+    </div>
+
+    <script>
+        // Carica impostazioni all'avvio
+        fetch('/api/settings')
+            .then(res => res.json())
+            .then(data => {
+                if (data.port) document.getElementById('port').value = data.port;
+                if (data.archive_limit) document.getElementById('archive_limit').value = data.archive_limit;
+            })
+            .catch(err => console.error(err));
+
+        async function saveSettings() {
+            const port = document.getElementById('port').value;
+            const archive_limit = document.getElementById('archive_limit').value;
+            const msg = document.getElementById('msg');
+
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ port: port, archive_limit: archive_limit })
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    msg.className = 'message success';
+                    msg.textContent = data.message;
+                    msg.style.display = 'block';
+                } else {
+                    msg.className = 'message error';
+                    msg.textContent = data.error || 'Errore salvataggio';
+                    msg.style.display = 'block';
+                }
+            } catch (e) {
+                msg.className = 'message error';
+                msg.textContent = 'Errore di connessione';
+                msg.style.display = 'block';
+            }
+        }
+
+        async function restartServer() {
+            if (!confirm("Sei sicuro di voler riavviare il server?")) return;
+
+            const msg = document.getElementById('msg');
+            msg.className = 'message success';
+            msg.textContent = 'Riavvio in corso... attendi...';
+            msg.style.display = 'block';
+
+            // Memorizza la porta attuale (o quella nuova se vogliamo essere precisi, 
+            // ma l'utente potrebbe aver salvato o meno. Assumiamo che se ha salvato, vuole andare sulla nuova)
+            // Leggiamo il valore dall'input che dovrebbe essere aggiornato
+            const targetPort = document.getElementById('port').value;
+
+            try {
+                await fetch('/api/restart', { method: 'POST' });
+
+                // Attendi e reindirizza
+                let countdown = 5;
+                const interval = setInterval(() => {
+                    msg.textContent = `Riavvio in corso... reload in ${countdown}s`;
+                    countdown--;
+                    if (countdown < 0) {
+                        clearInterval(interval);
+                        // Reindirizza alla (nuova) porta
+                        const hostname = window.location.hostname;
+                        window.location.href = `http://${hostname}:${targetPort}/settings`;
+                    }
+                }, 1000);
+
+            } catch (e) {
+                console.error(e);
+                // Se fetch fallisce (es. server muore subito), è buon segno per il restart
+                // Ma gestiamo graceful
+            }
+        }
+
+        async function shutdownServer() {
+            if (!confirm("Sei sicuro di voler spegnere il server?\nDovrai riavviarlo manualmente dal PC.")) return;
+
+            const msg = document.getElementById('msg');
+            msg.className = 'message success';
+            msg.textContent = 'Spegnimento in corso... puoi chiudere questa scheda.';
+            msg.style.display = 'block';
+
+            try {
+                await fetch('/api/shutdown', { method: 'POST' });
+            } catch (e) { console.error(e); }
+        }
+    </script>
+</body>
+
+</html>

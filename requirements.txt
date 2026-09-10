@@ -1,0 +1,4 @@
+flask
+requests
+plyer
+pyinstaller

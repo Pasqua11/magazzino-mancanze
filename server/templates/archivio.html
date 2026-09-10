@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Archivio Magazzino</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --surface: #ffffff;
+            --background: #f1f5f9;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background-color: var(--background);
+            color: var(--text-main);
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            background: var(--surface);
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            width: 100%;
+            max-width: 800px;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            color: var(--text-main);
+            margin-bottom: 0.5rem;
+        }
+
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        .back-link {
+            text-decoration: none;
+            color: var(--primary);
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 1rem;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        th {
+            font-weight: 600;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .note {
+            font-style: italic;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .search-container {
+            margin-bottom: 2rem;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .search-container input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+
+        th.sortable {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        th.sortable:hover {
+            color: var(--primary);
+        }
+
+        .sort-icon {
+            display: inline-block;
+            width: 1rem;
+            margin-left: 0.25rem;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header-row">
+            <h1>Archivio Storico</h1>
+            <a href="/" class="back-link">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="19" y1="12" x2="5" y2="12"></line>
+                    <polyline points="12 19 5 12 12 5"></polyline>
+                </svg>
+                Torna Indietro
+            </a>
+        </div>
+
+        <div class="search-container">
+            <input type="text" id="searchInput" placeholder="Cerca prodotto o note nell'archivio..." autocomplete="off">
+        </div>
+
+        <div id="archiveInfo" style="margin-bottom: 1rem; color: var(--text-muted); font-style: italic;"></div>
+
+        <div id="loading" style="text-align: center; color: var(--text-muted); margin-bottom: 1rem;">Caricamento...
+        </div>
+
+        <table id="archiveTable" style="display: none;">
+            <thead>
+                <tr>
+                    <th class="sortable" onclick="sortTable('prodotto')">Prodotto <span class="sort-icon"
+                            id="icon-prodotto"></span></th>
+                    <th class="sortable" onclick="sortTable('quantita')">Quantità <span class="sort-icon"
+                            id="icon-quantita"></span></th>
+                    <th class="sortable" onclick="sortTable('timestamp')">Data Inserimento <span class="sort-icon"
+                            id="icon-timestamp"></span></th>
+                    <th class="sortable" onclick="sortTable('archived_at')">Ordinato il <span class="sort-icon"
+                            id="icon-archived_at"></span></th>
+                    <th style="width: 50px;"></th>
+                </tr>
+            </thead>
+            <tbody id="archiveBody">
+                <!-- Rows here -->
+            </tbody>
+        </table>
+
+        <div
+            style="text-align: center; margin-top: 2rem; color: var(--text-muted); font-size: 0.8rem; border-top: 1px solid #e2e8f0; padding-top: 1rem;">
+            Software creato da <strong>Trentarossi Luca</strong>
+        </div>
+    </div>
+
+    <script>
+        let currentData = [];
+        let currentSortColumn = 'archived_at';
+        let currentSortDesc = true;
+        let searchTimeout = null;
+        const ARCHIVE_LIMIT = {{ archive_limit }};
+
+        async function loadArchive(query = '') {
+            try {
+                const url = query ? `/api/archivio?q=${encodeURIComponent(query)}` : `/api/archivio?limit=${ARCHIVE_LIMIT}`;
+
+                const infoDiv = document.getElementById('archiveInfo');
+                if (query) {
+                    infoDiv.textContent = `Ricerca in tutto l'archivio per: '${query}'`;
+                } else {
+                    infoDiv.textContent = `Vengono visualizzati gli ultimi ${ARCHIVE_LIMIT} record dell'archivio storico.`;
+                }
+
+                document.getElementById('loading').textContent = "Caricamento...";
+                document.getElementById('loading').style.display = 'block';
+                const table = document.getElementById('archiveTable');
+
+                const response = await fetch(url);
+                currentData = await response.json();
+
+                if (currentData.length === 0) {
+                    document.getElementById('loading').textContent = "Nessun elemento trovato.";
+                    document.getElementById('archiveBody').innerHTML = '';
+                    table.style.display = 'table';
+                    return;
+                }
+
+                document.getElementById('loading').style.display = 'none';
+                table.style.display = 'table';
+
+                // Forza l'aggiornamento della UI col sort corrente
+                renderTable();
+
+            } catch (e) {
+                console.error(e);
+                document.getElementById('loading').textContent = "Errore caricamento.";
+            }
+        }
+
+        function sortTable(column) {
+            if (currentSortColumn === column) {
+                currentSortDesc = !currentSortDesc;
+            } else {
+                currentSortColumn = column;
+                currentSortDesc = false; // Default a crescente quando si cambia colonna
+            }
+            renderTable();
+        }
+
+        function renderTable() {
+            // Aggiorna icone UI
+            ['prodotto', 'quantita', 'timestamp', 'archived_at'].forEach(col => {
+                document.getElementById(`icon-${col}`).textContent = '';
+            });
+            document.getElementById(`icon-${currentSortColumn}`).textContent = currentSortDesc ? '▼' : '▲';
+
+            // Sorting logica
+            currentData.sort((a, b) => {
+                let valA = a[currentSortColumn];
+                let valB = b[currentSortColumn];
+
+                // Handle missing values
+                if (valA === undefined || valA === null) valA = '';
+                if (valB === undefined || valB === null) valB = '';
+
+                // Handle numbers (quantita might be string but should sort as number)
+                if (currentSortColumn === 'quantita') {
+                    const numA = parseFloat(valA);
+                    const numB = parseFloat(valB);
+                    if (!isNaN(numA) && !isNaN(numB)) {
+                        valA = numA;
+                        valB = numB;
+                    }
+                }
+
+                if (valA < valB) return currentSortDesc ? 1 : -1;
+                if (valA > valB) return currentSortDesc ? -1 : 1;
+                return 0;
+            });
+
+            const tbody = document.getElementById('archiveBody');
+
+            tbody.innerHTML = currentData.map(item => {
+                const createdObj = item.timestamp ? new Date(item.timestamp) : null;
+                const created = createdObj ? createdObj.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
+
+                const archivedObj = item.archived_at ? new Date(item.archived_at) : null;
+                const archived = archivedObj ? archivedObj.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
+
+                return `
+                        <tr>
+                            <td>
+                                <div style="font-weight: 500;">${item.prodotto || ''}</div>
+                                ${item.note ? `<div class="note">${item.note}</div>` : ''}
+                            </td>
+                            <td>${item.quantita || '-'}</td>
+                            <td>${created}</td>
+                            <td>${archived}</td>
+                            <td style="text-align: center;">
+                                <button onclick="reorderItem('${item.id}')" style="background: none; border: none; cursor: pointer; color: var(--primary); padding: 0.25rem;" title="Riordina">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+            }).join('');
+        }
+
+        async function reorderItem(id) {
+            if (!confirm('Vuoi riordinare questo articolo?')) return;
+            try {
+                const response = await fetch(`/api/archivio/${id}/riordina`, { method: 'POST' });
+                if (response.ok) {
+                    alert('Articolo aggiunto alla lista delle mancanze!');
+                    window.location.href = '/'; // Torna alla home
+                } else {
+                    alert('Errore durante il riordino');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Errore di connessione');
+            }
+        }
+
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            if (searchTimeout) clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                loadArchive(e.target.value);
+            }, 400); // 400ms debounce
+        });
+
+        loadArchive();
+    </script>
+</body>
+
+</html>

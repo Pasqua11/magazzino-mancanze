@@ -1,0 +1,15 @@
+# --- Build PyInstaller ---
+build/
+dist/
+__pycache__/
+*.pyc
+
+# --- Dati runtime (generati dall'applicazione) ---
+mancanze.json
+archivio.json
+config.json
+server_config.json
+
+# --- Sistema ---
+Thumbs.db
+desktop.ini
