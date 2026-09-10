@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import threading
+import winreg
 import winsound
 import time
 from datetime import datetime
@@ -25,6 +26,36 @@ CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 # Formato unico per mostrare le date: lo stesso usato per rileggerle quando si
 # ordina una colonna. Tenerne uno solo evita che i due si disallineino.
 DATE_FMT = "%d/%m/%Y, %H:%M"
+
+# --- TEMA CHIARO / SCURO ---
+# "auto" segue l'impostazione di Windows; altrimenti si forza dalle Impostazioni
+# del Client, perche' e' una preferenza del singolo PC.
+TEMI = {
+    "chiaro": {
+        "sfondo": "#f0f0f0", "testo": "#1e293b", "secondario": "#64748b",
+        "tabella": "#ffffff", "riga_alt": "#e2e8f0", "intestazione": "#e2e8f0",
+        "selezione": "#3498db", "testo_selezione": "#ffffff",
+        "campo": "#ffffff", "bordo": "#cbd5e1",
+        "pulsante": "#e2e8f0", "pulsante_attivo": "#cbd5e1",
+    },
+    "scuro": {
+        "sfondo": "#1f1f1f", "testo": "#e8e8e8", "secondario": "#9aa0a6",
+        "tabella": "#252526", "riga_alt": "#2d2d30", "intestazione": "#333333",
+        "selezione": "#0a84ff", "testo_selezione": "#ffffff",
+        "campo": "#2d2d30", "bordo": "#3f3f46",
+        "pulsante": "#333333", "pulsante_attivo": "#3f3f46",
+    },
+}
+
+def windows_in_modalita_scura():
+    """Legge dal registro se Windows usa il tema scuro per le applicazioni."""
+    try:
+        chiave = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, chiave) as k:
+            valore, _ = winreg.QueryValueEx(k, "AppsUseLightTheme")
+        return valore == 0
+    except Exception:
+        return False  # in caso di dubbio, tema chiaro
 
 def create_normal_icon():
     # Icona Normale (Blu)
@@ -61,6 +92,8 @@ class MagazzinoClient:
         self.server_url = ""
         # Intestazione: valore di ripiego finche' non arriva quella del server
         self.titolo = "Articoli Mancanti"
+        self.alberi = []       # tabelle da ricolorare al cambio di tema
+        self.colori = TEMI["chiaro"]
         self.known_ids = set()
         self.first_update_done = False
         self._timer_primo_piano = None
@@ -68,6 +101,7 @@ class MagazzinoClient:
         
         # UI Setup
         self.setup_ui()
+        self.applica_tema()
         self.applica_titolo()
         
         # Tray Icon Setup
@@ -116,6 +150,7 @@ class MagazzinoClient:
         server_ip = config.get("server_ip", "")
         server_port = config.get("server_port", 5000)
         self.archive_limit = config.get("archive_limit", 100)
+        self.tema = config.get("tema", "auto")   # auto | chiaro | scuro
         
         # Se manca l'IP, chiedilo
         while not server_ip:
@@ -132,8 +167,72 @@ class MagazzinoClient:
 
         # Salva config
         self.server_url = f"http://{server_ip}:{server_port}"
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump({"server_ip": server_ip, "server_port": server_port, "archive_limit": self.archive_limit}, f)
+        self.salva_config(server_ip, server_port)
+
+    def salva_config(self, server_ip, server_port):
+        """Scrive su disco la configurazione del Client (un solo punto)."""
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump({"server_ip": server_ip,
+                       "server_port": int(server_port),
+                       "archive_limit": self.archive_limit,
+                       "tema": self.tema}, f, indent=4)
+
+    def applica_tema(self):
+        """Applica il tema chiaro o scuro a tutta l'interfaccia."""
+        scelta = self.tema
+        if scelta == "auto":
+            scelta = "scuro" if windows_in_modalita_scura() else "chiaro"
+        c = TEMI.get(scelta, TEMI["chiaro"])
+        self.colori = c
+
+        style = ttk.Style()
+        # Il tema "clam" e' l'unico che rispetta davvero i colori impostati
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        style.configure(".", background=c["sfondo"], foreground=c["testo"],
+                        fieldbackground=c["campo"], bordercolor=c["bordo"])
+        style.configure("TFrame", background=c["sfondo"])
+        style.configure("TLabel", background=c["sfondo"], foreground=c["testo"])
+        style.configure("TButton", background=c["pulsante"], foreground=c["testo"],
+                        bordercolor=c["bordo"])
+        style.map("TButton", background=[("active", c["pulsante_attivo"]),
+                                         ("pressed", c["pulsante_attivo"])])
+        style.configure("TEntry", fieldbackground=c["campo"], foreground=c["testo"],
+                        insertcolor=c["testo"], bordercolor=c["bordo"])
+        style.configure("TCombobox", fieldbackground=c["campo"], foreground=c["testo"],
+                        background=c["pulsante"], arrowcolor=c["testo"],
+                        bordercolor=c["bordo"])
+        style.configure("TScrollbar", background=c["pulsante"], troughcolor=c["sfondo"],
+                        arrowcolor=c["testo"], bordercolor=c["bordo"])
+        style.configure("Treeview", font=("Segoe UI", 12), rowheight=30,
+                        background=c["tabella"], fieldbackground=c["tabella"],
+                        foreground=c["testo"])
+        style.configure("Treeview.Heading", font=("Segoe UI", 13, "bold"),
+                        background=c["intestazione"], foreground=c["testo"])
+        style.map("Treeview", background=[("selected", c["selezione"])],
+                  foreground=[("selected", c["testo_selezione"])])
+        style.map("Treeview.Heading", background=[("active", c["pulsante_attivo"])])
+
+        # Widget non-ttk: vanno colorati a mano
+        try:
+            self.root.configure(bg=c["sfondo"])
+            self.lbl_credits.configure(foreground=c["secondario"])
+            self.context_menu.configure(bg=c["campo"], fg=c["testo"],
+                                        activebackground=c["selezione"],
+                                        activeforeground=c["testo_selezione"])
+        except Exception:
+            pass
+
+        # Righe alternate di tutte le tabelle aperte (principale e archivio)
+        for albero in list(self.alberi):
+            try:
+                albero.tag_configure("evenrow", background=c["riga_alt"])
+                albero.tag_configure("oddrow", background=c["tabella"])
+            except Exception:
+                self.alberi.remove(albero)  # finestra chiusa
 
     def setup_ui(self):
         # Bottom Frame (Azioni) - Creato PRIMA per garantirne la visibilità in basso
@@ -153,26 +252,13 @@ class MagazzinoClient:
         btn_archive.pack(side=tk.RIGHT, padx=5)
 
         # Credits
-        lbl_credits = ttk.Label(self.root, text="Software creato da Trentarossi Luca", font=("Segoe UI", 8), foreground="#64748b")
-        lbl_credits.pack(side=tk.BOTTOM, pady=2)
+        self.lbl_credits = ttk.Label(self.root, text="Software creato da Trentarossi Luca",
+                                     font=("Segoe UI", 8))
+        self.lbl_credits.pack(side=tk.BOTTOM, pady=2)
 
         # Frame principale (Tabella) - Prende tutto lo spazio RMANENTE
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-        # Style Configuration for Visibility
-        style = ttk.Style()
-        
-        # Tema che supporta i bordi delle righe/colonne se possibile
-        try:
-            style.theme_use("clam")
-        except: pass
-        
-        style.configure("Treeview", font=("Segoe UI", 12), rowheight=30, background="#ffffff", foreground="black", fieldbackground="#ffffff")
-        style.configure("Treeview.Heading", font=("Segoe UI", 13, "bold"), background="#f1f5f9")
-        
-        # Abilita le linee della griglia (dipende dal tema, clam le supporta meglio)
-        style.map("Treeview", background=[('selected', '#3498db')])
 
         # Header (il testo arriva dalle Impostazioni del server)
         self.lbl_title = ttk.Label(main_frame, text=self.titolo, font=("Segoe UI", 18, "bold"))
@@ -192,9 +278,8 @@ class MagazzinoClient:
         self.tree.column("note", width=250, stretch=tk.YES)
         self.tree.column("ora", width=160, stretch=tk.NO)
         
-        # Tags for zebra striping (colori più decisi)
-        self.tree.tag_configure('evenrow', background="#e2e8f0") # Azzurro/grigio più scuro
-        self.tree.tag_configure('oddrow', background="#ffffff") # Bianco
+        # Le righe alternate vengono colorate da applica_tema
+        self.alberi.append(self.tree)
         
         self.tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         
@@ -434,7 +519,8 @@ class MagazzinoClient:
         """Apre finestra per cambiare IP del server."""
         settings_win = tk.Toplevel(self.root)
         settings_win.title("Impostazioni")
-        settings_win.geometry("300x320")
+        settings_win.geometry("340x430")
+        settings_win.configure(bg=self.colori["sfondo"])
         
         # IP
         ttk.Label(settings_win, text="IP Server Magazzino:").pack(pady=(10, 5))
@@ -464,6 +550,17 @@ class MagazzinoClient:
         limit_var = tk.StringVar(value=str(self.archive_limit))
         entry_limit = ttk.Entry(settings_win, textvariable=limit_var, width=10)
         entry_limit.pack(pady=5)
+
+        # Aspetto (chiaro/scuro): e' una preferenza del singolo PC, quindi sta
+        # qui e non nelle impostazioni del server
+        ttk.Label(settings_win, text="Aspetto:").pack(pady=(10, 5))
+        etichette_tema = {"auto": "Automatico (come Windows)",
+                          "chiaro": "Chiaro",
+                          "scuro": "Scuro"}
+        valore_da_etichetta = {v: k for k, v in etichette_tema.items()}
+        tema_var = tk.StringVar(value=etichette_tema.get(self.tema, etichette_tema["auto"]))
+        ttk.Combobox(settings_win, textvariable=tema_var, width=28, state="readonly",
+                     values=list(etichette_tema.values())).pack(pady=5)
         
         def save_settings():
             new_ip = ip_var.get().strip()
@@ -491,9 +588,10 @@ class MagazzinoClient:
             # Salva
             self.server_url = f"http://{new_ip}:{new_port}"
             self.archive_limit = int(new_limit)
+            self.tema = valore_da_etichetta.get(tema_var.get(), "auto")
             try:
-                with open(CONFIG_FILE, 'w') as f:
-                    json.dump({"server_ip": new_ip, "server_port": int(new_port), "archive_limit": self.archive_limit}, f)
+                self.salva_config(new_ip, new_port)
+                self.applica_tema()          # effetto immediato, senza riavviare
                 messagebox.showinfo("Salvato", "Configurazione aggiornata!", parent=settings_win)
                 settings_win.destroy()
                 # Prova subito a ricaricare
@@ -506,6 +604,7 @@ class MagazzinoClient:
     def open_archive(self):
         """Apre finestra con storico archivio."""
         arch_win = tk.Toplevel(self.root)
+        arch_win.configure(bg=self.colori["sfondo"])
         arch_win.title("Archivio Storico")
         arch_win.geometry("850x600")
         arch_win.minsize(700, 450)
@@ -536,9 +635,10 @@ class MagazzinoClient:
         tree.column("creato", width=160, stretch=tk.NO)
         tree.column("archiviato", width=160, stretch=tk.NO)
         
-        # Tags for zebra striping (colori più decisi)
-        tree.tag_configure('evenrow', background="#e2e8f0")
-        tree.tag_configure('oddrow', background="#ffffff")
+        # Righe alternate secondo il tema in uso
+        tree.tag_configure('evenrow', background=self.colori["riga_alt"])
+        tree.tag_configure('oddrow', background=self.colori["tabella"])
+        self.alberi.append(tree)
         
         scrollbar = ttk.Scrollbar(arch_win, orient=tk.VERTICAL, command=tree.yview)
         tree.configure(yscroll=scrollbar.set)
