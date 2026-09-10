@@ -33,6 +33,11 @@ SERVER_CONFIG_FILE = os.path.join(BASE_DIR, 'server_config.json')
 # Numero massimo di record mantenuti nello storico
 ARCHIVIO_MAX_RECORD = 2000
 
+# Lunghezze massime accettate dai campi, per evitare che un invio anomalo
+# gonfi indefinitamente il file dei dati
+MAX_TESTO = 200
+MAX_NOTE = 1000
+
 # --- GESTIONE PERSISTENZA JSON ---
 # I file JSON sono il database dell'applicazione. Flask serve le richieste su
 # piu' thread contemporaneamente, quindi ogni ciclo leggi-modifica-riscrivi va
@@ -47,6 +52,28 @@ def synchronized(fn):
         with _data_lock:
             return fn(*args, **kwargs)
     return wrapper
+
+def solo_json(fn):
+    """Rifiuta le richieste che non dichiarano un corpo JSON.
+
+    Una pagina web qualunque, aperta per sbaglio da un PC dell'ufficio, puo'
+    inviare una POST a questo server tramite un form nascosto, ma non puo'
+    dichiarare un corpo JSON senza il consenso esplicito del server. Il
+    controllo basta quindi a impedire che un sito esterno spenga il magazzino
+    o ne cambi le impostazioni.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not request.is_json:
+            return jsonify({'error': 'Richiesta non valida'}), 400
+        return fn(*args, **kwargs)
+    return wrapper
+
+def testo_valido(valore, massimo):
+    """Normalizza un campo di testo in arrivo: stringa, ripulita e troncata."""
+    if valore is None:
+        return ''
+    return str(valore).strip()[:massimo]
 
 def _quarantine(path):
     """Mette da parte un file illeggibile invece di lasciarlo sovrascrivere.
@@ -165,6 +192,7 @@ def get_settings():
     return jsonify(load_server_config())
 
 @app.route('/api/settings', methods=['POST'])
+@solo_json
 @synchronized
 def update_settings():
     """Aggiorna le impostazioni."""
@@ -178,9 +206,9 @@ def update_settings():
              return jsonify({'error': 'Porta non valida (usa 1024-65535)'}), 400
         
         new_limit = int(req_data.get('archive_limit', 100))
-        if new_limit < 1:
-            return jsonify({'error': 'Il limite di archiviazione deve essere positivo'}), 400
-    except ValueError:
+        if not (1 <= new_limit <= ARCHIVIO_MAX_RECORD):
+            return jsonify({'error': f'Il limite deve essere tra 1 e {ARCHIVIO_MAX_RECORD}'}), 400
+    except (ValueError, TypeError):
         return jsonify({'error': 'Porta e Limite devono essere un numero intero'}), 400
 
     config = load_server_config()
@@ -193,6 +221,7 @@ def update_settings():
         return jsonify({'error': 'Errore nel salvataggio'}), 500
 
 @app.route('/api/restart', methods=['POST'])
+@solo_json
 def restart_server():
     """Riavvia il server."""
     def restart():
@@ -207,6 +236,7 @@ def restart_server():
     return jsonify({'success': True, 'message': 'Riavvio in corso...'})
 
 @app.route('/api/shutdown', methods=['POST'])
+@solo_json
 def shutdown_server():
     """Spegne il server."""
     def shutdown():
@@ -232,15 +262,21 @@ def get_mancanze():
 @synchronized
 def add_mancanza():
     """Aggiunge una nuova mancanza."""
-    req_data = request.get_json()
-    if not req_data or 'prodotto' not in req_data:
+    req_data = request.get_json(silent=True)
+    if not req_data:
         return jsonify({'error': 'Dati mancanti'}), 400
+
+    # Il campo obbligatorio del modulo si aggira facilmente chiamando l'API
+    # direttamente: senza questo controllo finivano in elenco righe vuote.
+    prodotto = testo_valido(req_data.get('prodotto'), MAX_TESTO)
+    if not prodotto:
+        return jsonify({'error': "Il nome del prodotto e' obbligatorio"}), 400
 
     new_item = {
         'id': str(uuid.uuid4()),
-        'prodotto': req_data['prodotto'],
-        'quantita': req_data.get('quantita', ''),
-        'note': req_data.get('note', ''),
+        'prodotto': prodotto,
+        'quantita': testo_valido(req_data.get('quantita'), MAX_TESTO),
+        'note': testo_valido(req_data.get('note'), MAX_NOTE),
         'stato': 'pending',  # pending, ordered
         'timestamp': datetime.now().isoformat()
     }

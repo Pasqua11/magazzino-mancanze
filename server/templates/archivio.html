@@ -178,6 +178,16 @@
         let searchTimeout = null;
         const ARCHIVE_LIMIT = {{ archive_limit }};
 
+        // Il testo dei prodotti lo scrive chi compila il modulo: va inserito
+        // come testo, mai come HTML, altrimenti un nome che contiene tag viene
+        // eseguito dal browser di chi apre la pagina.
+        function escapeHtml(testo) {
+            if (testo === null || testo === undefined) return '';
+            return String(testo).replace(/[&<>"']/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
+
         async function loadArchive(query = '') {
             try {
                 const url = query ? `/api/archivio?q=${encodeURIComponent(query)}` : `/api/archivio?limit=${ARCHIVE_LIMIT}`;
@@ -268,10 +278,10 @@
                 return `
                         <tr>
                             <td>
-                                <div style="font-weight: 500;">${item.prodotto || ''}</div>
-                                ${item.note ? `<div class="note">${item.note}</div>` : ''}
+                                <div style="font-weight: 500;">${escapeHtml(item.prodotto)}</div>
+                                ${item.note ? `<div class="note">${escapeHtml(item.note)}</div>` : ''}
                             </td>
-                            <td>${item.quantita || '-'}</td>
+                            <td>${item.quantita ? escapeHtml(item.quantita) : '-'}</td>
                             <td>${created}</td>
                             <td>${archived}</td>
                             <td style="text-align: center;">

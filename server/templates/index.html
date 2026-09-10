@@ -162,6 +162,16 @@
     </div>
 
     <script>
+        // Il testo dei prodotti lo scrive chi compila il modulo: va inserito
+        // come testo, mai come HTML, altrimenti un nome che contiene tag viene
+        // eseguito dal browser di chi apre la pagina.
+        function escapeHtml(testo) {
+            if (testo === null || testo === undefined) return '';
+            return String(testo).replace(/[&<>"']/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
+
         // Setup Form
         document.getElementById('mancanzaForm').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -227,12 +237,12 @@
                     html += `
                         <li style="background: white; border: 1px solid #e2e8f0; padding: 1rem; margin-bottom: 0.5rem; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <div style="font-weight: bold; font-size: 1.2rem; margin-bottom: 0.25rem;">${item.prodotto}</div>
+                                <div style="font-weight: bold; font-size: 1.2rem; margin-bottom: 0.25rem;">${escapeHtml(item.prodotto)}</div>
                                 <div style="color: var(--text-main); font-size: 1rem; margin-bottom: 0.25rem;">
-                                    ${item.quantita ? `<span style="background-color: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 4px; font-weight: bold;">Qta: ${item.quantita}</span> • ` : ''} 
+                                    ${item.quantita ? `<span style="background-color: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 4px; font-weight: bold;">Qta: ${escapeHtml(item.quantita)}</span> • ` : ''} 
                                     <span style="color: var(--text-muted); font-size: 0.9rem;">${date}</span>
                                 </div>
-                                ${item.note ? `<div style="background-color: #fffbeb; color: #b45309; border: 1px solid #fcd34d; padding: 4px 8px; border-radius: 4px; font-weight: 500; font-size: 0.95rem; margin-top: 0.5rem; display: inline-block;">Note: ${item.note}</div>` : ''}
+                                ${item.note ? `<div style="background-color: #fffbeb; color: #b45309; border: 1px solid #fcd34d; padding: 4px 8px; border-radius: 4px; font-weight: 500; font-size: 0.95rem; margin-top: 0.5rem; display: inline-block;">Note: ${escapeHtml(item.note)}</div>` : ''}
                             </div>
                             <div style="text-align: right;">
                                 <span style="display: inline-block; padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; background-color: ${item.stato === 'pending' ? '#fee2e2' : '#dcfce7'}; color: ${statusColor};">

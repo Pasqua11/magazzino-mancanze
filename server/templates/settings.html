@@ -189,7 +189,13 @@
             const targetPort = document.getElementById('port').value;
 
             try {
-                await fetch('/api/restart', { method: 'POST' });
+                // Il tipo di contenuto JSON e' richiesto dal server: impedisce
+                // che un sito esterno riavvii il magazzino con un form nascosto.
+                await fetch('/api/restart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
 
                 // Attendi e reindirizza
                 let countdown = 5;
@@ -220,7 +226,11 @@
             msg.style.display = 'block';
 
             try {
-                await fetch('/api/shutdown', { method: 'POST' });
+                await fetch('/api/shutdown', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
             } catch (e) { console.error(e); }
         }
     </script>
