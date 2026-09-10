@@ -1,3 +1,6 @@
+# --- Eseguibili compilati (distribuiti tramite GitHub Releases) ---
+*.exe
+
 # --- Build PyInstaller ---
 build/
 dist/
