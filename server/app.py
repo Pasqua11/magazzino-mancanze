@@ -2,6 +2,8 @@ import os
 import json
 import uuid
 import sys
+import shutil
+import functools
 import threading
 import time
 import webbrowser
@@ -25,50 +27,125 @@ else:
 app = Flask(__name__, template_folder=TEMPLATE_DIR)
 
 DB_FILE = os.path.join(BASE_DIR, 'mancanze.json')
+ARCHIVIO_FILE = os.path.join(BASE_DIR, 'archivio.json')
 SERVER_CONFIG_FILE = os.path.join(BASE_DIR, 'server_config.json')
+
+# Numero massimo di record mantenuti nello storico
+ARCHIVIO_MAX_RECORD = 2000
+
+# --- GESTIONE PERSISTENZA JSON ---
+# I file JSON sono il database dell'applicazione. Flask serve le richieste su
+# piu' thread contemporaneamente, quindi ogni ciclo leggi-modifica-riscrivi va
+# protetto da un lock: senza, due inserimenti simultanei si sovrascrivono a
+# vicenda e una delle due segnalazioni sparisce senza lasciare traccia.
+_data_lock = threading.RLock()
+
+def synchronized(fn):
+    """Serializza l'intera richiesta: il ciclo leggi-modifica-scrivi diventa atomico."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _data_lock:
+            return fn(*args, **kwargs)
+    return wrapper
+
+def _quarantine(path):
+    """Mette da parte un file illeggibile invece di lasciarlo sovrascrivere.
+
+    Senza questo, un JSON troncato veniva letto come lista vuota e la prima
+    scrittura successiva cancellava definitivamente i dati recuperabili.
+    """
+    try:
+        stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        dest = f"{path}.corrotto-{stamp}"
+        os.replace(path, dest)
+        print(f"File illeggibile messo da parte in: {dest}")
+    except Exception as e:
+        print(f"Impossibile mettere da parte {path}: {e}")
+
+def _read_json(path, default):
+    """Legge un file JSON; se e' danneggiato tenta il recupero dal backup."""
+    if not os.path.exists(path):
+        return default
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Errore lettura {os.path.basename(path)}: {e}")
+
+    _quarantine(path)
+
+    backup = path + '.bak'
+    if os.path.exists(backup):
+        try:
+            with open(backup, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            print(f"Dati ripristinati dal backup {os.path.basename(backup)}")
+            return data
+        except Exception as e:
+            print(f"Anche il backup e' illeggibile: {e}")
+
+    return default
+
+def _write_json(path, data):
+    """Scrittura atomica con backup della versione precedente.
+
+    Scrive su un file temporaneo, forza la scrittura fisica su disco e solo
+    allora sostituisce l'originale. Un'interruzione a meta' (spegnimento del
+    server, crash, black-out) lascia intatto il file precedente invece di
+    troncarlo.
+    """
+    tmp = path + '.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+
+        if os.path.exists(path):
+            shutil.copy2(path, path + '.bak')
+
+        os.replace(tmp, path)  # sostituzione atomica
+        return True
+    except Exception as e:
+        print(f"Errore scrittura {os.path.basename(path)}: {e}")
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
 
 # --- CONFIGURAZIONE SERVER ---
 def load_server_config():
     default_config = {"port": 5000, "archive_limit": 100}
-    if not os.path.exists(SERVER_CONFIG_FILE):
+    config = _read_json(SERVER_CONFIG_FILE, None)
+    if not isinstance(config, dict):
         return default_config
-    try:
-        with open(SERVER_CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-            # Ensure defaults are present for old files
-            if "archive_limit" not in config:
-                config["archive_limit"] = 100
-            return config
-    except Exception as e:
-        print(f"Errore lettura config server: {e}")
-        return default_config
+    # Completa i valori mancanti nei file di configurazione piu' vecchi
+    for chiave, valore in default_config.items():
+        config.setdefault(chiave, valore)
+    return config
 
 def save_server_config(data):
-    try:
-        with open(SERVER_CONFIG_FILE, 'w') as f:
-            json.dump(data, f, indent=4)
-        return True
-    except Exception as e:
-        print(f"Errore scrittura config server: {e}")
-        return False
+    return _write_json(SERVER_CONFIG_FILE, data)
 
-# --- GESTIONE PERSISTENZA JSON ---
+# --- DATI ---
 def load_data():
-    if not os.path.exists(DB_FILE):
-        return []
-    try:
-        with open(DB_FILE, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Errore lettura DB: {e}")
-        return []
+    with _data_lock:
+        return _read_json(DB_FILE, [])
 
 def save_data(data):
-    try:
-        with open(DB_FILE, 'w') as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        print(f"Errore scrittura DB: {e}")
+    with _data_lock:
+        return _write_json(DB_FILE, data)
+
+def load_archivio():
+    with _data_lock:
+        return _read_json(ARCHIVIO_FILE, [])
+
+def save_archivio(data):
+    with _data_lock:
+        return _write_json(ARCHIVIO_FILE, data)
 
 # --- ROUTES & API ---
 
@@ -88,6 +165,7 @@ def get_settings():
     return jsonify(load_server_config())
 
 @app.route('/api/settings', methods=['POST'])
+@synchronized
 def update_settings():
     """Aggiorna le impostazioni."""
     req_data = request.get_json()
@@ -134,7 +212,10 @@ def shutdown_server():
     def shutdown():
         print("Spegnimento server tra 1 secondo...")
         time.sleep(1)
-        os._exit(0) # Terminazione forzata immediata
+        # Attende che l'eventuale scrittura in corso sia conclusa, altrimenti
+        # la terminazione forzata puo' lasciare un JSON a meta'
+        with _data_lock:
+            os._exit(0)
 
     threading.Thread(target=shutdown).start()
     return jsonify({'success': True, 'message': 'Spegnimento in corso...'})
@@ -148,6 +229,7 @@ def get_mancanze():
     return jsonify(data)
 
 @app.route('/api/mancanze', methods=['POST'])
+@synchronized
 def add_mancanza():
     """Aggiunge una nuova mancanza."""
     req_data = request.get_json()
@@ -170,6 +252,7 @@ def add_mancanza():
     return jsonify(new_item), 201
 
 @app.route('/api/mancanze/<item_id>/ordinato', methods=['POST'])
+@synchronized
 def mark_ordered(item_id):
     """Segna come ordinato E SPOSTA IN ARCHIVIO AUTOMATICAMENTE."""
     data = load_data()
@@ -194,9 +277,9 @@ def mark_ordered(item_id):
         # Salva in archivio
         archivio = load_archivio()
         archivio.append(item_to_archive)
-        # Mantieni solo gli ultimi 2000 record
-        if len(archivio) > 2000:
-            archivio = archivio[-2000:]
+        # Mantieni solo i record piu' recenti
+        if len(archivio) > ARCHIVIO_MAX_RECORD:
+            archivio = archivio[-ARCHIVIO_MAX_RECORD:]
         save_archivio(archivio)
         
         return jsonify({'success': True})
@@ -204,6 +287,7 @@ def mark_ordered(item_id):
         return jsonify({'error': 'Item not found'}), 404
 
 @app.route('/api/mancanze/<item_id>', methods=['DELETE'])
+@synchronized
 def delete_mancanza(item_id):
     """Cancella una mancanza."""
     data = load_data()
@@ -219,24 +303,6 @@ def delete_mancanza(item_id):
 
 
 # --- ARCHIVIO ---
-ARCHIVIO_FILE = os.path.join(BASE_DIR, 'archivio.json')
-
-def load_archivio():
-    if not os.path.exists(ARCHIVIO_FILE):
-        return []
-    try:
-        with open(ARCHIVIO_FILE, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Errore lettura Archivio: {e}")
-        return []
-
-def save_archivio(data):
-    try:
-        with open(ARCHIVIO_FILE, 'w') as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        print(f"Errore scrittura Archivio: {e}")
 
 @app.route('/archivio')
 def view_archivio():
@@ -268,6 +334,7 @@ def get_archivio():
     return jsonify(data)
 
 @app.route('/api/mancanze/<item_id>/archivia', methods=['POST'])
+@synchronized
 def archive_mancanza(item_id):
     """Sposta una mancanza in archivio."""
     data = load_data()
@@ -290,9 +357,9 @@ def archive_mancanza(item_id):
         # Salva in archivio
         archivio = load_archivio()
         archivio.append(item_to_archive)
-        # Mantieni solo gli ultimi 2000 record
-        if len(archivio) > 2000:
-            archivio = archivio[-2000:]
+        # Mantieni solo i record piu' recenti
+        if len(archivio) > ARCHIVIO_MAX_RECORD:
+            archivio = archivio[-ARCHIVIO_MAX_RECORD:]
         save_archivio(archivio)
         
         return jsonify({'success': True})
@@ -300,6 +367,7 @@ def archive_mancanza(item_id):
         return jsonify({'error': 'Item not found'}), 404
 
 @app.route('/api/archivio/<item_id>/riordina', methods=['POST'])
+@synchronized
 def riordina_mancanza(item_id):
     """Riordina un articolo dall'archivio (crea nuova mancanza)."""
     archivio = load_archivio()

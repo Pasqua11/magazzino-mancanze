@@ -12,6 +12,9 @@ mancanze.json
 archivio.json
 config.json
 server_config.json
+*.bak
+*.tmp
+*.corrotto-*
 
 # --- Sistema ---
 Thumbs.db
