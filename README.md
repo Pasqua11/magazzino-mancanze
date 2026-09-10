@@ -9,6 +9,12 @@ Assicurati di avere Python installato su entrambi i PC.
 2.  Navigare nella cartella del server.
 3.  Eseguire il file `ServerMagazzino.exe` (La porta di default è `5000` ma può essere cambiata nelle Impostazioni web).
 4.  Il server rimarrà in ascolto e gestirà le segnalazioni.
+5.  Compare un'**icona verde nella barra delle applicazioni**, in basso a destra.
+    Con il tasto destro si apre il menu: pagina del magazzino, cartella dei dati,
+    diario degli eventi e spegnimento del server. Doppio click apre la pagina.
+
+Se qualcosa non funziona, il file `magazzino_server.log` accanto all'eseguibile
+riporta errori e avvii: è la prima cosa da guardare.
 
 ### Lato Client
 1.  Aprire un terminale o prompt dei comandi.

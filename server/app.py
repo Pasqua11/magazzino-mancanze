@@ -6,10 +6,21 @@ import shutil
 import functools
 import threading
 import time
+import logging
 import webbrowser
+from logging.handlers import RotatingFileHandler
 from threading import Timer
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template
+
+# L'icona nella barra delle applicazioni e' facoltativa: se le librerie non
+# sono disponibili il server funziona ugualmente, semplicemente senza icona.
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    TRAY_DISPONIBILE = True
+except ImportError:
+    TRAY_DISPONIBILE = False
 
 # --- PERCORSI ---
 # I dati vivono accanto all'eseguibile (build PyInstaller) oppure nella radice
@@ -37,6 +48,34 @@ ARCHIVIO_MAX_RECORD = 2000
 # gonfi indefinitamente il file dei dati
 MAX_TESTO = 200
 MAX_NOTE = 1000
+
+LOG_FILE = os.path.join(BASE_DIR, 'magazzino_server.log')
+
+# --- DIARIO DEGLI EVENTI ---
+# L'eseguibile e' compilato senza finestra di console: tutto quello che veniva
+# stampato a video andava perso, errori compresi. Ora finisce in un file
+# accanto all'eseguibile, consultabile dall'icona nella barra.
+log = logging.getLogger('magazzino')
+
+def configura_log():
+    formato = logging.Formatter('%(asctime)s  %(levelname)-7s  %(message)s',
+                                '%d/%m/%Y %H:%M:%S')
+    su_file = RotatingFileHandler(LOG_FILE, maxBytes=512 * 1024,
+                                  backupCount=2, encoding='utf-8')
+    su_file.setFormatter(formato)
+
+    radice = logging.getLogger()
+    radice.setLevel(logging.INFO)
+    radice.addHandler(su_file)
+
+    # Avviando da sorgente la console c'e': continuiamo a scrivere anche li'
+    if not getattr(sys, 'frozen', False):
+        a_video = logging.StreamHandler()
+        a_video.setFormatter(formato)
+        radice.addHandler(a_video)
+
+    # Il registro delle richieste HTTP e' rumoroso: teniamo solo gli errori
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 # --- GESTIONE PERSISTENZA JSON ---
 # I file JSON sono il database dell'applicazione. Flask serve le richieste su
@@ -85,9 +124,9 @@ def _quarantine(path):
         stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         dest = f"{path}.corrotto-{stamp}"
         os.replace(path, dest)
-        print(f"File illeggibile messo da parte in: {dest}")
+        log.warning("File illeggibile messo da parte in: %s", dest)
     except Exception as e:
-        print(f"Impossibile mettere da parte {path}: {e}")
+        log.error("Impossibile mettere da parte %s: %s", path, e)
 
 def _read_json(path, default):
     """Legge un file JSON; se e' danneggiato tenta il recupero dal backup."""
@@ -98,7 +137,7 @@ def _read_json(path, default):
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
-        print(f"Errore lettura {os.path.basename(path)}: {e}")
+        log.error("Errore lettura %s: %s", os.path.basename(path), e)
 
     _quarantine(path)
 
@@ -107,10 +146,10 @@ def _read_json(path, default):
         try:
             with open(backup, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            print(f"Dati ripristinati dal backup {os.path.basename(backup)}")
+            log.warning("Dati ripristinati dal backup %s", os.path.basename(backup))
             return data
         except Exception as e:
-            print(f"Anche il backup e' illeggibile: {e}")
+            log.error("Anche il backup e' illeggibile: %s", e)
 
     return default
 
@@ -135,7 +174,7 @@ def _write_json(path, data):
         os.replace(tmp, path)  # sostituzione atomica
         return True
     except Exception as e:
-        print(f"Errore scrittura {os.path.basename(path)}: {e}")
+        log.error("Errore scrittura %s: %s", os.path.basename(path), e)
         try:
             if os.path.exists(tmp):
                 os.remove(tmp)
@@ -225,7 +264,7 @@ def update_settings():
 def restart_server():
     """Riavvia il server."""
     def restart():
-        print("Riavvio server tra 1 secondo...")
+        log.info("Riavvio del server richiesto")
         time.sleep(1)
         # Riavvia il processo sostituendolo con uno nuovo
         os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -240,7 +279,7 @@ def restart_server():
 def shutdown_server():
     """Spegne il server."""
     def shutdown():
-        print("Spegnimento server tra 1 secondo...")
+        log.info("Spegnimento del server richiesto")
         time.sleep(1)
         # Attende che l'eventuale scrittura in corso sia conclusa, altrimenti
         # la terminazione forzata puo' lasciare un JSON a meta'
@@ -434,20 +473,89 @@ def riordina_mancanza(item_id):
     else:
         return jsonify({'error': 'Item not found'}), 404
 
+# --- ICONA NELLA BARRA DELLE APPLICAZIONI ---
+# L'eseguibile e' compilato senza console: senza icona, una volta avviato il
+# server non e' ne' visibile ne' chiudibile se non dal Gestione attivita'.
+
+def crea_icona_immagine():
+    """Disegna l'icona: uno scaffale stilizzato su fondo verde."""
+    lato = 64
+    immagine = Image.new('RGB', (lato, lato), (22, 101, 52))
+    disegno = ImageDraw.Draw(immagine)
+    bianco = (255, 255, 255)
+    disegno.rectangle((12, 14, 52, 50), outline=bianco, width=4)
+    disegno.line((12, 32, 52, 32), fill=bianco, width=4)
+    disegno.line((32, 32, 32, 50), fill=bianco, width=4)
+    return immagine
+
+def apri_con_windows(percorso):
+    """Apre un file o una cartella con l'applicazione predefinita."""
+    try:
+        if hasattr(os, 'startfile'):
+            os.startfile(percorso)
+        else:
+            webbrowser.open(f'file://{percorso}')
+    except Exception as e:
+        log.error("Impossibile aprire %s: %s", percorso, e)
+
+def costruisci_icona(porta):
+    def apri_pagina(icona=None, voce=None):
+        webbrowser.open_new(f'http://127.0.0.1:{porta}')
+
+    def apri_cartella_dati(icona=None, voce=None):
+        apri_con_windows(BASE_DIR)
+
+    def apri_diario(icona=None, voce=None):
+        apri_con_windows(LOG_FILE)
+
+    def spegni(icona=None, voce=None):
+        log.info("Spegnimento richiesto dall'icona nella barra")
+        icona.stop()
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Apri pagina magazzino", apri_pagina, default=True),
+        pystray.MenuItem("Apri cartella dati", apri_cartella_dati),
+        pystray.MenuItem("Mostra diario eventi", apri_diario),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Spegni server", spegni),
+    )
+    return pystray.Icon("MagazzinoServer", crea_icona_immagine(),
+                        f"Server Magazzino - porta {porta}", menu)
+
 if __name__ == '__main__':
-    # Host 0.0.0.0 rende il server visibile nella LAN
+    configura_log()
+
     SERVER_CONFIG = load_server_config()
     PORT = SERVER_CONFIG.get('port', 5000)
-    
+
     def open_browser():
         webbrowser.open_new(f'http://127.0.0.1:{PORT}')
 
-    # Evita di aprire il browser due volte se il reloader è attivo (in sviluppo)
-    if not os.environ.get("WERKZEUG_RUN_MAIN"):
-        Timer(1.5, open_browser).start()
+    def avvia_server_web():
+        # Host 0.0.0.0 rende il server visibile nella LAN
+        try:
+            app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+        except Exception as e:
+            log.critical("Il server web si e' fermato: %s", e)
 
-    print("Avvio server Magazzino...")
-    print(f"Accessibile via browser all'indirizzo http://<IP_QUESTO_PC>:{PORT}")
-    
-    # Debug=False è meglio per la produzione/eseguibile
-    app.run(host='0.0.0.0', port=PORT, debug=False)
+    log.info("Avvio server Magazzino sulla porta %s", PORT)
+    log.info("Accessibile dalla rete all'indirizzo http://<IP_QUESTO_PC>:%s", PORT)
+    log.info("Cartella dati: %s", BASE_DIR)
+
+    Timer(1.5, open_browser).start()
+
+    if TRAY_DISPONIBILE:
+        # Il server web va in un thread non-daemon: anche se l'icona non
+        # dovesse partire, il processo resta vivo e continua a servire i client.
+        threading.Thread(target=avvia_server_web, name='server-web',
+                         daemon=False).start()
+        try:
+            costruisci_icona(PORT).run()  # blocca fino a "Spegni server"
+        except Exception as e:
+            log.error("Icona nella barra non disponibile: %s", e)
+        else:
+            log.info("Server chiuso dall'utente")
+            with _data_lock:  # non interrompere una scrittura in corso
+                os._exit(0)
+    else:
+        avvia_server_web()
