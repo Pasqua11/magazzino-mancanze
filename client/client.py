@@ -6,9 +6,9 @@ import os
 import re
 import sys
 import threading
+import winsound
 import time
 from datetime import datetime
-from plyer import notification
 import pystray
 from PIL import Image, ImageDraw
 
@@ -25,7 +25,6 @@ CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 # Formato unico per mostrare le date: lo stesso usato per rileggerle quando si
 # ordina una colonna. Tenerne uno solo evita che i due si disallineino.
 DATE_FMT = "%d/%m/%Y, %H:%M"
-DEFAULT_CONFIG = {"server_ip": "", "server_port": 5000, "archive_limit": 100}
 
 def create_normal_icon():
     # Icona Normale (Blu)
@@ -60,8 +59,11 @@ class MagazzinoClient:
         self.root.minsize(700, 400)
         
         self.server_url = ""
+        # Intestazione: valore di ripiego finche' non arriva quella del server
+        self.titolo = "Articoli Mancanti"
         self.known_ids = set()
         self.first_update_done = False
+        self._timer_primo_piano = None
         self.load_config()
         
         # UI Setup
@@ -171,9 +173,9 @@ class MagazzinoClient:
         # Abilita le linee della griglia (dipende dal tema, clam le supporta meglio)
         style.map("Treeview", background=[('selected', '#3498db')])
 
-        # Header
-        lbl_title = ttk.Label(main_frame, text="Articoli Mancanti", font=("Segoe UI", 18, "bold"))
-        lbl_title.pack(anchor="w", pady=(0, 15))
+        # Header (il testo arriva dalle Impostazioni del server)
+        self.lbl_title = ttk.Label(main_frame, text=self.titolo, font=("Segoe UI", 18, "bold"))
+        self.lbl_title.pack(anchor="w", pady=(0, 15))
 
         # Treeview (Tabella)
         columns = ("prodotto", "quantita", "note", "ora")
@@ -255,6 +257,9 @@ class MagazzinoClient:
                 
                 # Aggiorna UI nel thread principale
                 self.root.after(0, self.update_table, pending_items, notify)
+
+                # L'intestazione e' definita nelle Impostazioni del server
+                self.scarica_titolo()
             else:
                 print(f"Server error: {response.status_code}")
         except requests.exceptions.ConnectionError:
@@ -262,39 +267,70 @@ class MagazzinoClient:
         except Exception as e:
             print(f"Errore refresh: {e}")
 
+    def scarica_titolo(self):
+        """Legge dal server l'intestazione configurata e la applica alla finestra."""
+        try:
+            risposta = requests.get(f"{self.server_url}/api/settings", timeout=3)
+            if risposta.status_code == 200:
+                titolo = (risposta.json().get('titolo') or '').strip()
+                if titolo and titolo != self.titolo:
+                    self.titolo = titolo
+                    self.root.after(0, self.applica_titolo)
+        except Exception:
+            pass  # server non raggiungibile: teniamo l'intestazione attuale
+
+    def applica_titolo(self):
+        """Aggiorna intestazione e titolo della finestra (nel thread grafico)."""
+        try:
+            self.lbl_title.config(text=self.titolo)
+            self.root.title(f"{self.titolo} - Magazzino")
+        except Exception as e:
+            print(f"Errore aggiornamento intestazione: {e}")
+
     def update_table(self, items, notify):
-        # Pulisci tabella
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        
+        # Aggiornamento differenziale invece di svuotare e ricostruire la
+        # tabella: la ricostruzione cancellava ogni 5 secondi la riga
+        # selezionata dall'utente (e "Segna come Ordinato" rispondeva di non
+        # avere nulla da segnare) e riportava la lista in cima.
+        selezione = [i for i in self.tree.selection()]
         current_ids = set()
         new_items_found = []
 
-        for i, item in enumerate(items):
+        for posizione, item in enumerate(items):
             item_id = item['id']
             current_ids.add(item_id)
-            
+
             # Formatta orario
             ts = item.get('timestamp', '')
             try:
-                dt = datetime.fromisoformat(ts)
-                ora_str = dt.strftime(DATE_FMT)
-            except:
+                ora_str = datetime.fromisoformat(ts).strftime(DATE_FMT)
+            except Exception:
                 ora_str = ts
-            
-            tags = ('evenrow',) if i % 2 == 0 else ('oddrow',)
-            self.tree.insert("", "end", iid=item_id, values=(
-                item['prodotto'], 
-                item['quantita'], 
-                item['note'], 
-                ora_str
-            ), tags=tags)
 
-            # Se è un ID nuovo e siamo in modalità notifica (non al primo avvio assoluto se notify=False)
-            # Ma qui notify=True nel loop.
-            # Per evitare notifiche all'avvio:
+            valori = (item['prodotto'], item['quantita'], item['note'], ora_str)
+            tags = ('evenrow',) if posizione % 2 == 0 else ('oddrow',)
+
+            if self.tree.exists(item_id):
+                self.tree.item(item_id, values=valori, tags=tags)
+                self.tree.move(item_id, '', posizione)
+            else:
+                self.tree.insert("", posizione, iid=item_id, values=valori, tags=tags)
+
+            # La segnalazione di novita' dipende solo dagli ID gia' notificati,
+            # non dal fatto che la riga esista gia' in tabella: un aggiornamento
+            # manuale puo' averla inserita senza notificarla.
             if notify and item_id not in self.known_ids:
                 new_items_found.append(item['prodotto'])
+
+        # Righe non piu' presenti (ordinate o cancellate altrove)
+        for item_id in list(self.tree.get_children("")):
+            if item_id not in current_ids:
+                self.tree.delete(item_id)
+
+        # Ripristina la selezione sulle righe ancora presenti
+        rimaste = [i for i in selezione if self.tree.exists(i)]
+        if rimaste:
+            self.tree.selection_set(rimaste)
 
         # Aggiorna Icona Tray
         if self.tray_icon:
@@ -313,41 +349,56 @@ class MagazzinoClient:
         else:
             self.known_ids &= current_ids
 
-        if not self.first_update_done:
-            self.first_update_done = True
-            return
-
-        if new_items_found:
-            self.show_notification(new_items_found)
-
     def show_notification(self, products):
-        title = "Nuova Mancanza in Magazzino!"
-        msg = f"Aggiunto: {', '.join(products)}"
-        
-        # Prima ripristina la finestra
-        self.restore_window()
-        
+        """Avvisa dell'arrivo di nuovi articoli portando avanti la finestra.
+
+        Non usiamo le notifiche di Windows: sia quelle di plyer sia i "balloon"
+        della system tray vengono scartati silenziosamente da Windows 11, quindi
+        non comparivano mai. La finestra che si apre davanti a chi lavora e' un
+        avviso che non puo' passare inosservato.
+        """
+        # Breve segnale acustico di sistema
         try:
-            notification.notify(
-                title=title,
-                message=msg,
-                app_name="Magazzino Client",
-                timeout=10
-            )
-        except Exception as e:
-            print(f"Errore notifica: {e}")
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            pass
+
+        self.restore_window()
 
     def restore_window(self):
-        """Ripristina la finestra e la porta in primo piano."""
+        """Apre la finestra e la porta davanti a tutto, e ce la lascia.
+
+        Windows non permette a un'applicazione in secondo piano di prendersi il
+        primo piano: prima il flag "sempre davanti" veniva rilasciato dopo un
+        secondo e la finestra ricadeva dietro a quella su cui si stava
+        lavorando. Ora resta davanti finche' non la si tocca (o al massimo un
+        minuto), cosi' la segnalazione non passa inosservata.
+        """
         try:
-            self.root.deiconify()     # Se minimizzata
-            self.root.state('normal') # Ripristina stato
-            self.root.lift()          # Porta in primo piano
-            self.root.focus_force()   # Forza il focus (importante per Windows)
-            self.root.attributes('-topmost', 1) # Forza sopra tutto temporaneamente
-            self.root.after(1000, lambda: self.root.attributes('-topmost', 0)) # Rilascia dopo 1s
+            self.root.deiconify()      # se ridotta a icona o nascosta nel tray
+            self.root.state('normal')
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.focus_force()
+
+            # Un click sulla finestra la riporta al comportamento normale
+            self.root.bind("<Button>", self._rilascia_primo_piano, add="+")
+            if self._timer_primo_piano is not None:
+                self.root.after_cancel(self._timer_primo_piano)
+            self._timer_primo_piano = self.root.after(60000, self._rilascia_primo_piano)
         except Exception as e:
             print(f"Errore restore window: {e}")
+
+    def _rilascia_primo_piano(self, event=None):
+        """Toglie il "sempre davanti" quando l'utente ha visto la segnalazione."""
+        try:
+            if self._timer_primo_piano is not None:
+                self.root.after_cancel(self._timer_primo_piano)
+                self._timer_primo_piano = None
+            self.root.unbind("<Button>")
+            self.root.attributes('-topmost', False)
+        except Exception:
+            pass
 
     def mark_as_ordered(self):
         selected = self.tree.selection()

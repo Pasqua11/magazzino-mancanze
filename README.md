@@ -41,7 +41,9 @@ Vai su `http://localhost:5000` nel browser.
    - **Se sei in LAN reale**: Inserisci l'IP del PC Magazzino (es. `192.168.1.50`).
    - **Se stai testando sullo stesso PC**: Inserisci `127.0.0.1` o `localhost`.
 3. Il programma si aprirà e controllerà le mancanze ogni 5 secondi.
-4. Quando il Magazzino inserisce un nuovo articolo, riceverai una **Notifica Windows** (in basso a destra).
+4. Quando il Magazzino inserisce un nuovo articolo, la **finestra del Client si apre in primo piano**
+   con un breve segnale acustico. Non vengono usate le notifiche di Windows: su Windows 11
+   non venivano mostrate.
 
 ## 4. Reset Configurazione
 Se sbagli a inserire l'IP, cancella il file `config.json` e riavvia il Client.
