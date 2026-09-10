@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, simpledialog
 import requests
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -20,6 +21,10 @@ else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
+
+# Formato unico per mostrare le date: lo stesso usato per rileggerle quando si
+# ordina una colonna. Tenerne uno solo evita che i due si disallineino.
+DATE_FMT = "%d/%m/%Y, %H:%M"
 DEFAULT_CONFIG = {"server_ip": "", "server_port": 5000, "archive_limit": 100}
 
 def create_normal_icon():
@@ -132,7 +137,7 @@ class MagazzinoClient:
         btn_frame = ttk.Frame(self.root, padding="10")
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
         
-        btn_refresh = ttk.Button(btn_frame, text="Aggiorna Ora", command=self.refresh_data)
+        btn_refresh = ttk.Button(btn_frame, text="Aggiorna Ora", command=self.refresh_async)
         btn_refresh.pack(side=tk.LEFT, padx=5)
         
         btn_mark = ttk.Button(btn_frame, text="Segna come Ordinato", command=self.mark_as_ordered)
@@ -233,6 +238,11 @@ class MagazzinoClient:
                 print(f"Errore polling: {e}")
             time.sleep(5) # Controlla ogni 5 secondi
 
+    def refresh_async(self):
+        """Aggiornamento manuale in background: la richiesta di rete non deve
+        bloccare la finestra mentre attende la risposta del server."""
+        threading.Thread(target=self.refresh_data, daemon=True).start()
+
     def refresh_data(self, notify=False):
         """Scarica i dati dal server e aggiorna la UI."""
         try:
@@ -268,7 +278,7 @@ class MagazzinoClient:
             ts = item.get('timestamp', '')
             try:
                 dt = datetime.fromisoformat(ts)
-                ora_str = dt.strftime("%d/%m/%Y, %H:%M")
+                ora_str = dt.strftime(DATE_FMT)
             except:
                 ora_str = ts
             
@@ -293,8 +303,15 @@ class MagazzinoClient:
             else:
                 self.tray_icon.icon = create_normal_icon()
 
-        # Aggiorna set ID conosciuti
-        self.known_ids = current_ids
+        # Aggiorna il set degli ID gia' visti.
+        # Con notify=False (aggiornamento manuale, "Segna come ordinato",
+        # salvataggio impostazioni) scartiamo solo gli ID spariti: se
+        # registrassimo anche quelli nuovi, il controllo automatico successivo
+        # li considererebbe gia' noti e la notifica andrebbe persa.
+        if notify:
+            self.known_ids = current_ids
+        else:
+            self.known_ids &= current_ids
 
         if not self.first_update_done:
             self.first_update_done = True
@@ -345,7 +362,7 @@ class MagazzinoClient:
     def do_mark_request(self, item_id):
         try:
             url = f"{self.server_url}/api/mancanze/{item_id}/ordinato"
-            requests.post(url)
+            requests.post(url, timeout=5)
             # Al prossimo refresh sparirà
             self.refresh_data(notify=False)
         except Exception as e:
@@ -444,9 +461,6 @@ class MagazzinoClient:
         search_entry = ttk.Entry(search_frame, textvariable=search_var, width=40)
         search_entry.pack(side=tk.LEFT, padx=5)
         
-        # Variabile per salvare tutti i dati caricati
-        self.archive_data_full = []
-        
         # Tabella Archivio
         columns = ("prodotto", "quantita", "creato", "archiviato")
         tree = ttk.Treeview(arch_win, columns=columns, show="headings")
@@ -474,48 +488,71 @@ class MagazzinoClient:
         # Variabile per il timer di debounce della ricerca
         self.search_timer = None
         
+        def nel_thread_grafico(funzione, *args):
+            """Esegue nel thread della finestra, ignorando la chiamata se nel
+            frattempo l'utente ha chiuso l'archivio."""
+            try:
+                arch_win.after(0, funzione, *args)
+            except tk.TclError:
+                pass
+
+        def mostra_errore(messaggio):
+            messagebox.showerror("Errore", messaggio, parent=arch_win)
+
+        def riempi_tabella(data):
+            """Aggiorna la tabella. Chiamata sempre dal thread grafico."""
+            # Ordina per data archiviazione decrescente
+            data.sort(key=lambda x: x.get('archived_at', ''), reverse=True)
+
+            for row in tree.get_children():
+                tree.delete(row)
+
+            for i, item in enumerate(data):
+                # Formatta date
+                try:
+                    ts_cr = datetime.fromisoformat(item['timestamp']).strftime(DATE_FMT)
+                except Exception:
+                    ts_cr = item.get('timestamp', '')
+
+                try:
+                    ts_ar = datetime.fromisoformat(item['archived_at']).strftime(DATE_FMT)
+                except Exception:
+                    ts_ar = item.get('archived_at', '')
+
+                tags = ('evenrow',) if i % 2 == 0 else ('oddrow',)
+                tree.insert("", "end", values=(
+                    item.get('prodotto', ''),
+                    item.get('quantita', ''),
+                    ts_cr,
+                    ts_ar
+                ), tags=tags)
+
         def fetch_and_update_archive_table():
             query = search_var.get().strip()
-            
+
             if query:
                 lbl_info.config(text=f"Ricerca in tutto l'archivio per: '{query}'")
-                url = f"{self.server_url}/api/archivio?q={query}"
+                # I parametri passano da requests, che li codifica: prima una
+                # ricerca contenente & o # arrivava troncata o alterata al server.
+                params = {'q': query}
             else:
                 lbl_info.config(text=f"Vengono visualizzati gli ultimi {self.archive_limit} record dell'archivio storico.")
-                url = f"{self.server_url}/api/archivio?limit={self.archive_limit}"
-                
-            try:
-                response = requests.get(url, timeout=3)
-                if response.status_code == 200:
-                    data = response.json()
-                    # Ordina per data archiviazione decrescente
-                    data.sort(key=lambda x: x.get('archived_at', ''), reverse=True)
-                    
-                    # Pulisci
-                    for row in tree.get_children():
-                        tree.delete(row)
-                        
-                    for i, item in enumerate(data):
-                        # Formatta date
-                        try:
-                            ts_cr = datetime.fromisoformat(item['timestamp']).strftime("%d/%m/%Y, %H:%M")
-                        except: ts_cr = item.get('timestamp', '')
-                        
-                        try:
-                            ts_ar = datetime.fromisoformat(item['archived_at']).strftime("%d/%m/%Y, %H:%M")
-                        except: ts_ar = item.get('archived_at', '')
-                        
-                        tags = ('evenrow',) if i % 2 == 0 else ('oddrow',)
-                        tree.insert("", "end", values=(
-                            item['prodotto'], 
-                            item['quantita'], 
-                            ts_cr, 
-                            ts_ar
-                        ), tags=tags)
-                else:
-                    messagebox.showerror("Errore", "Impossibile caricare archivio", parent=arch_win)
-            except Exception as e:
-                messagebox.showerror("Errore", f"Errore connessione API: {e}", parent=arch_win)
+                params = {'limit': self.archive_limit}
+
+            def scarica():
+                try:
+                    response = requests.get(f"{self.server_url}/api/archivio",
+                                            params=params, timeout=5)
+                    if response.status_code == 200:
+                        nel_thread_grafico(riempi_tabella, response.json())
+                    else:
+                        nel_thread_grafico(mostra_errore, "Impossibile caricare archivio")
+                except Exception as e:
+                    nel_thread_grafico(mostra_errore, f"Errore connessione API: {e}")
+
+            # In background: la ricerca riparte a ogni pausa di digitazione e su
+            # un archivio pieno bloccherebbe la finestra a ogni battuta.
+            threading.Thread(target=scarica, daemon=True).start()
 
         def on_search_write(*args):
             if self.search_timer is not None:
@@ -540,15 +577,20 @@ class MagazzinoClient:
         try:
             # Prova ordinamento numerico per "quantita" se sono tutti interi validi (o int(x))
             if col == "quantita":
-                l.sort(key=lambda t: int(t[0]) if t[0].isdigit() else 0, reverse=reverse)
+                # La quantita' e' testo libero ("50mt", "2 pacchi", "1,5 kg"):
+                # ordiniamo sul numero iniziale, se c'e'.
+                def valore_numerico(testo):
+                    m = re.match(r"\s*(\d+(?:[.,]\d+)?)", testo or "")
+                    return float(m.group(1).replace(',', '.')) if m else 0.0
+                l.sort(key=lambda t: valore_numerico(t[0]), reverse=reverse)
             # Ordinamento per date (assumendo il formato DD/MM/YYYY HH:MM)
             elif col in ("creato", "archiviato"):
                 def parse_date(date_str):
                     try:
-                        return time.strptime(date_str, "%d/%m/%Y %H:%M")
-                    except:
-                        # Fallback per valori vecchi/non standard
-                        return time.strptime("01/01/1970 00:00", "%d/%m/%Y %H:%M")
+                        return datetime.strptime(date_str, DATE_FMT)
+                    except Exception:
+                        # Valori vecchi o non riconosciuti finiscono in fondo
+                        return datetime.min
                 l.sort(key=lambda t: parse_date(t[0]), reverse=reverse)
             else:
                 # Fallback al sort alfabetico di default
